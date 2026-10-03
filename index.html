@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sales Visit Tracker</title>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:#f1f5f9;color:#0f172a}
+.wrap{max-width:560px;margin:0 auto;padding:16px}h1{font-size:20px;text-align:center;margin:6px 0 12px}
+.tabs{display:flex;gap:8px;margin-bottom:14px}.tabs button{margin:0;background:#e2e8f0;color:#334155}.tabs button.active{background:#2563eb;color:#fff}
+.card{background:#fff;border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 4px #0002}
+label{display:block;font-size:13px;margin:10px 0 4px;color:#475569}
+select,input,textarea,button{width:100%;padding:12px;font-size:16px;border:1px solid #cbd5e1;border-radius:8px}
+button{background:#2563eb;color:#fff;border:0;font-weight:600;margin-top:12px;cursor:pointer}
+button.green{background:#16a34a}button.red{background:#dc2626}button:disabled{opacity:.5}
+.msg{font-size:14px;margin-top:8px;color:#475569}.badge{display:inline-block;padding:3px 10px;border-radius:99px;background:#dcfce7;color:#166534;font-size:13px}
+img{max-width:100%;border-radius:8px;margin-top:8px}.hide{display:none}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row input{flex:1;min-width:110px}.row button{width:auto;margin:0}
+.emp{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #e2e8f0;gap:8px}
+.emp button{width:auto;margin:0;padding:7px 10px;font-size:13px}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:#94a3b8;margin-right:8px}.dot.on{background:#22c55e;box-shadow:0 0 6px #22c55e}
+small{color:#64748b;display:block;margin-top:3px}a{color:#2563eb}
+</style></head><body><div class="wrap">
+<h1>🏥 Sales Visit Tracker</h1>
+<div class="tabs"><button id="tE" class="active">Employee Login</button><button id="tA">Admin</button></div>
+
+<!-- ============ EMPLOYEE TAB ============ -->
+<div id="pE">
+  <div class="card" id="s1">
+    <label>Select your name</label><select id="emp"><option>Loading…</option></select>
+    <button id="loginBtn">Login &amp; Share Location</button><div class="msg" id="m1"></div>
+  </div>
+  <div class="card hide" id="s2">
+    <div><b id="who"></b> <span class="badge hide" id="on">● Online</span></div>
+    <button class="green" id="inBtn">Punch In</button><div class="msg" id="m2"></div>
+  </div>
+  <div class="card hide" id="s3">
+    <b>Hospital Visit</b> <span class="msg" id="vc"></span>
+    <label>Hospital name</label><input id="hosp">
+    <label>Work done</label><textarea id="work" rows="3"></textarea>
+    <label>Hospital photo</label><input type="file" id="photo" accept="image/*" capture="environment">
+    <img id="prev" class="hide">
+    <button id="saveBtn">Save Visit</button><div class="msg" id="m3"></div>
+    <button class="red" id="outBtn">Punch Out</button>
+  </div>
+</div>
+
+<!-- ============ ADMIN TAB ============ -->
+<div id="pA" class="hide">
+  <div class="card" id="lg"><b>Admin Login</b>
+    <div class="row" style="margin-top:10px"><input type="password" id="pw" placeholder="Admin password"><button id="go">Login</button></div><small id="lm"></small></div>
+  <div id="ad" class="hide">
+    <div class="card"><b>Onboard Employee</b>
+      <div class="row" style="margin-top:10px"><input id="nm" placeholder="Employee name"><input id="eid" placeholder="Employee ID"><button id="add">Add</button></div><small id="am"></small></div>
+    <div class="card"><b>Employees</b> <small style="display:inline">(auto-refresh 15s)</small><div id="list"></div>
+      <button class="red" id="lo">Logout Admin</button></div>
+  </div>
+</div>
+</div>
+<script>
+const API = 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE';
+const $ = id => document.getElementById(id);
+let pw = '', poll = null;
+
+async function call(d, admin) {
+  const r = await fetch(API, { method: 'POST', body: JSON.stringify(admin ? { ...d, password: pw } : d) });
+  const j = await r.json(); if (!j.ok) throw new Error(j.error); return j;
+}
+function gps() {
+  return new Promise((res, rej) => navigator.geolocation.getCurrentPosition(
+    p => res({ lat: p.coords.latitude, lng: p.coords.longitude }),
+    () => rej(new Error('Location permission is required. Please allow location.')),
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }));
+}
+
+/* ---------- Tabs ---------- */
+function tab(a) {
+  $('pE').classList.toggle('hide', a); $('pA').classList.toggle('hide', !a);
+  $('tE').classList.toggle('active', !a); $('tA').classList.toggle('active', a);
+  clearInterval(poll); if (a && pw && !$('ad').classList.contains('hide')) { load(); poll = setInterval(load, 15000); }
+}
+$('tE').onclick = () => tab(false); $('tA').onclick = () => tab(true);
+
+/* ---------- Employee ---------- */
+let emp = null, photoData = '', visits = 0, timer = null;
+const base = () => ({ id: emp.id, name: emp.name });
+
+call({ action: 'employees' }).then(j => {
+  $('emp').innerHTML = '<option value="">-- Select --</option>' + j.employees.map(e => `<option value="${e.id}|${e.name}">${e.name}</option>`).join('');
+  const saved = localStorage.getItem('emp'); if (saved) $('emp').value = saved;
+}).catch(e => $('m1').textContent = e.message);
+
+$('loginBtn').onclick = async () => {
+  const v = $('emp').value; if (!v) return $('m1').textContent = 'Select your name';
+  const [id, name] = v.split('|'); emp = { id, name };
+  $('loginBtn').disabled = true; $('m1').textContent = 'Getting location…';
+  try {
+    const l = await gps();
+    const j = await call({ action: 'login', ...base(), ...l });
+    localStorage.setItem('emp', v);
+    $('s1').classList.add('hide'); $('s2').classList.remove('hide'); $('who').textContent = name;
+    if (j.session) { visits = j.session.visits; goOnline(); } else $('m2').textContent = 'Location recorded. Tap Punch In.';
+  } catch (e) { $('m1').textContent = e.message; $('loginBtn').disabled = false; }
+};
+
+$('inBtn').onclick = async () => {
+  $('inBtn').disabled = true; $('m2').textContent = 'Punching in…';
+  try { const l = await gps(); await call({ action: 'punchin', ...base(), ...l }); visits = 0; goOnline(); }
+  catch (e) { $('m2').textContent = e.message; $('inBtn').disabled = false; }
+};
+
+function goOnline() {
+  $('inBtn').classList.add('hide'); $('on').classList.remove('hide'); $('m2').textContent = '';
+  $('s3').classList.remove('hide'); $('vc').textContent = `(${visits} saved)`;
+  clearInterval(timer);
+  timer = setInterval(() => gps().then(l => call({ action: 'ping', ...base(), ...l })).catch(() => {}), 60000);
+}
+
+$('photo').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const s = Math.min(1, 900 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+    c.width = img.width * s; c.height = img.height * s; c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const url = c.toDataURL('image/jpeg', 0.6); photoData = url.split(',')[1];
+    $('prev').src = url; $('prev').classList.remove('hide');
+  };
+  img.src = URL.createObjectURL(f);
+};
+
+$('saveBtn').onclick = async () => {
+  if (!$('hosp').value.trim() || !$('work').value.trim() || !photoData) return $('m3').textContent = 'Fill hospital, work done and photo';
+  $('saveBtn').disabled = true; $('m3').textContent = 'Saving…';
+  try {
+    const l = await gps();
+    await call({ action: 'visit', ...base(), ...l, hospital: $('hosp').value.trim(), work: $('work').value.trim(), photo: photoData });
+    visits++; $('vc').textContent = `(${visits} saved)`;
+    $('hosp').value = ''; $('work').value = ''; $('photo').value = ''; photoData = ''; $('prev').classList.add('hide');
+    $('m3').textContent = '✅ Visit saved. Enter next hospital.';
+  } catch (e) { $('m3').textContent = e.message; }
+  $('saveBtn').disabled = false;
+};
+
+$('outBtn').onclick = async () => {
+  if (!confirm('Punch out now?')) return;
+  $('outBtn').disabled = true; $('m3').textContent = 'Punching out…';
+  try {
+    const l = await gps(); const j = await call({ action: 'punchout', ...base(), ...l });
+    clearInterval(timer); $('s3').classList.add('hide'); $('on').classList.add('hide');
+    $('m2').textContent = `Punched out ✅ Distance travelled: ${j.km} km`; $('inBtn').classList.remove('hide'); $('inBtn').disabled = false;
+  } catch (e) { $('m3').textContent = e.message; }
+  $('outBtn').disabled = false;
+};
+
+/* ---------- Admin ---------- */
+$('go').onclick = async () => {
+  pw = $('pw').value;
+  try { await call({ action: 'admin_login' }, true); $('pw').value = ''; $('lm').textContent = '';
+    $('lg').classList.add('hide'); $('ad').classList.remove('hide'); load(); poll = setInterval(load, 15000); }
+  catch (e) { pw = ''; $('lm').textContent = e.message; }
+};
+$('pw').onkeydown = e => { if (e.key === 'Enter') $('go').click(); };
+$('lo').onclick = () => { pw = ''; clearInterval(poll); $('ad').classList.add('hide'); $('lg').classList.remove('hide'); };
+
+async function load() {
+  try {
+    const j = await call({ action: 'admin_data' }, true);
+    $('list').innerHTML = j.list.map(e => {
+      const stale = e.online && e.epoch && (j.now - e.epoch) > 300000;
+      const status = e.online ? `Online since ${e.punchIn}${stale ? ' (no update >5 min)' : ''}` : 'Offline';
+      const kmTxt = e.online ? 'Trip in progress' : (e.hasDone ? `${e.km} km today` : '');
+      const map = e.lat ? `<a target="_blank" href="https://www.google.com/maps?q=${e.lat},${e.lng}">📍 Live location</a> · ${e.seen}` : 'No location yet';
+      return `<div class="emp"><div><span class="dot ${e.online ? 'on' : ''}"></span><b>${e.name}</b> (${e.id}) — ${status}
+        <small>Visits today: ${e.visits} ${kmTxt ? '· <b>' + kmTxt + '</b>' : ''}</small><small>${map}</small></div>
+        <button class="red" onclick="del('${e.id}','${e.name.replace(/'/g, '')}')">Delete</button></div>`;
+    }).join('') || '<small>No employees yet.</small>';
+  } catch (e) { $('list').textContent = e.message; }
+}
+$('add').onclick = async () => {
+  try { await call({ action: 'admin_add', name: $('nm').value.trim(), id: $('eid').value.trim() }, true);
+    $('nm').value = $('eid').value = ''; $('am').textContent = 'Added ✅'; load(); }
+  catch (e) { $('am').textContent = e.message; }
+};
+async function del(id, name) {
+  if (!confirm('Offboard ' + name + '?')) return;
+  try { await call({ action: 'admin_delete', id }, true); load(); } catch (e) { alert(e.message); }
+}
+</script></body></html>
